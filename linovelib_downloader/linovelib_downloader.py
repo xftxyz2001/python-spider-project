@@ -1,4 +1,6 @@
+import glob
 import json
+import logging
 import os
 import re
 import time
@@ -13,10 +15,25 @@ from selenium import webdriver
 from selenium.webdriver.edge.options import Options
 
 
+# 绿色
+def printi(text):
+    print(f"\033[32m{text}\033[0m")
+
+
+# 黄色
+def printw(text):
+    print(f"\033[33m{text}\033[0m")
+
+
+# 红色
+def printe(text):
+    print(f"\033[31m{text}\033[0m")
+
+
 class LinovelibCrawler:
 
     def start_edge(self):
-        print("正在启动Edge浏览器...")
+        printi("正在启动Edge浏览器...")
         options = Options()
         options.add_argument("--headless")
         options.add_argument("--disable-gpu")
@@ -28,7 +45,7 @@ class LinovelibCrawler:
 
     # 初始化
     def __init__(self):
-        print("正在初始化...")
+        printi("正在初始化...")
 
         self.base_url = "https://www.linovelib.com"
         self.session = requests.Session()
@@ -60,7 +77,8 @@ class LinovelibCrawler:
         try:
             self.driver.quit()
         except Exception as e:
-            print(f"关闭浏览器出错: {e}")
+            printe(f"关闭浏览器出错: ")
+            logging.exception(e)
 
     # 退出
     def __del__(self):
@@ -80,7 +98,7 @@ class LinovelibCrawler:
 
         for attempt in range(max(self.max_retry, 3)):
             try:
-                print(f"请求页面: {url}")
+                printi(f"请求页面: {url}")
 
                 if attempt == 1:  # 第二次重试，刷新
                     self.driver.refresh()
@@ -102,18 +120,19 @@ class LinovelibCrawler:
                 self.request_interval = self.min_request_interval
                 return etree.HTML(page_source)
             except Exception as e:
-                print(f"请求页面失败: {e}")
+                printe(f"请求页面失败: ")
+                logging.exception(e)
                 if self.request_interval < self.max_request_interval:
                     self.request_interval *= 2
 
                 if attempt <= self.max_retry // 2:  # 前三次
-                    print(f"将在 {self.request_interval} 秒后重试...")
+                    printw(f"将在 {self.request_interval} 秒后重试...")
                     continue
 
                 self.driver_quit()
                 self.start_edge()
 
-        print("已达到最大重试次数，程序即将退出...")
+        printw("已达到最大重试次数，程序即将退出...")
         exit()
 
     # 解析图书信息
@@ -158,12 +177,12 @@ class LinovelibCrawler:
 
     # 下载文件
     def download_file(self, file_url, addtional_headers={}, save_path=None):
-        print(f"正在下载文件: {file_url}")
+        printi(f"正在下载文件: {file_url}")
         response = self.session.get(
             file_url, headers={**self.headers, **addtional_headers}
         )
         if not response.ok:
-            print(f"下载文件失败: {response.status_code}")
+            printe(f"下载文件失败: {response.status_code}")
             return
 
         save_path = save_path or file_url.split("/")[-1]
@@ -172,7 +191,7 @@ class LinovelibCrawler:
             os.makedirs(save_dir, exist_ok=True)
         with open(save_path, "wb") as f:
             f.write(response.content)
-        print(f"文件下载成功: {save_path}")
+        printi(f"文件下载成功: {save_path}")
 
     # 解码文本
     def decode_text(self, text):
@@ -239,7 +258,7 @@ class LinovelibCrawler:
                 )
                 contents.append(f"![{img_name}]({save_path})")
 
-        return "\n".join(contents)
+        return "\n\n".join(contents)
 
     # 解析章节内容
     def parse_chapter(self, tree):
@@ -259,9 +278,9 @@ class LinovelibCrawler:
         try:
             with open(f".{self.novel_id}.log.json", "w", encoding="utf-8") as f:
                 json.dump(self.metadata, f)
-            print("章节信息保存成功.")
+            printi("章节信息保存成功.")
         except Exception as e:
-            print(f"章节信息保存失败: {e}")
+            printe(f"章节信息保存失败: {e}")
 
     def load_catalog(self):
         if os.path.exists(f".{self.novel_id}.log.json") and os.path.exists(
@@ -270,23 +289,43 @@ class LinovelibCrawler:
             try:
                 with open(f".{self.novel_id}.log.json", "r", encoding="utf-8") as f:
                     self.metadata = json.load(f)
-                print(f"章节信息已读取.")
+                printi(f"章节信息已读取.")
                 return
             except Exception as e:
-                print(f"章节信息读取失败: {e}")
+                printe(f"章节信息读取失败: ")
+                logging.exception(e)
 
-        print(f"获取章节目录...")
+        printi(f"获取章节目录...")
         catalog_url = f"{self.base_url}/novel/{self.novel_id}/catalog"
 
         catalog_html = self.fetch_html(catalog_url)
         self.parse_matedata(catalog_html)
         self.save_catalog()
 
+        with open(self.sava_filename, "w", encoding="utf-8") as f:
+            f.write(f"{self.matedata["title"]}\n---\n")
+
     def delete_catalog(self):
         try:
             os.remove(f".{self.novel_id}.log.json")
         except Exception as e:
-            print(f"章节信息删除失败: {e}")
+            printe(f"章节信息删除失败: {e}")
+
+    def delete_page_source_files(self):
+        files = glob.glob(".page_source-*.html")
+        for file in files:
+            try:
+                os.remove(file)
+                printi(f"文件已删除: {file}")
+            except Exception as e:
+                printe(f"删除文件 {file} 时出错:")
+                logging.exception(e)
+
+    def delete_cache(self):
+        # 删除章节信息
+        self.delete_catalog()
+        # 删除错误的章节文件缓存
+        self.delete_page_source_files()
 
     def download_loop(self):
         for volume in self.metadata["volumes"]:
@@ -294,7 +333,7 @@ class LinovelibCrawler:
                 continue
 
             volume_name = volume["name"]
-            print(f"当前卷: {volume_name}")
+            printi(f"当前卷: {volume_name}")
             chapters = volume["chapters"]
             if volume["status"] == "not_started":
                 with open(self.sava_filename, "a", encoding="utf-8") as f:
@@ -308,7 +347,7 @@ class LinovelibCrawler:
                     continue
 
                 chapter_title = chapter["name"]
-                print(f"当前章节: {chapter_title}")
+                printi(f"当前章节: {chapter_title}")
                 if chapter["status"] == "not_started":
                     with open(self.sava_filename, "a", encoding="utf-8") as f:
                         f.write(f"## {chapter_title}\n\n")
@@ -328,7 +367,7 @@ class LinovelibCrawler:
 
     # 将 Markdown文件转换为 EPUB文件
     def to_epub(self):
-        print("正在生成 EPUB 文件...")
+        printi("正在生成 EPUB 文件...")
         outputfile = f"{self.sava_filename}.epub"
         pypandoc.ensure_pandoc_installed()
         pypandoc.convert_file(self.sava_filename, "epub", outputfile=outputfile)
@@ -339,20 +378,19 @@ class LinovelibCrawler:
 
         epub_name = f"{self.metadata['title']}.epub"
         epub.write_epub(epub_name, book)
-        print(f"EPUB 文件生成完成. {epub_name}")
+        os.remove(outputfile)
+        printi(f"EPUB 文件生成完成. {epub_name}")
 
     def download(self, novel_id):
-        print(f"开始下载 {novel_id}")
+        printi(f"开始下载 {novel_id}")
 
         self.novel_id = novel_id
         self.sava_filename = f"{novel_id}.md"
 
         self.load_catalog()
-        # with open(self.sava_filename, "w", encoding="utf-8") as f:
-        #     f.write(f"{self.matedata["title"]}\n---\n")
-        # self.download_loop()
-        self.delete_catalog()
-        print(f"{self.novel_id} 下载完成")
+        self.download_loop()
+        self.delete_cache()
+        printi(f"{self.novel_id} 下载完成")
 
         self.to_epub()
 
@@ -362,10 +400,12 @@ if __name__ == "__main__":
         "请输入小说ID或粘贴网址\neg.(1)4521\n   (2)https://www.linovelib.com/novel/4521.html\n   (3)https://www.linovelib.com/novel/4521/catalog\n>>>"
     )
     novel_id = re.findall(r"\d+", input_id)[0]
-    print(f"小说ID已获取: {novel_id}")
+    printi(f"小说ID已获取: {novel_id}")
     try:
         crawler = LinovelibCrawler()
         crawler.download(novel_id)
     except Exception as e:
-        print(f"出错了: {e}")
+        printe("出错了: ")
+        logging.exception(e)
         input("按任意键退出...")
+    printi("程序已退出.")
