@@ -33,7 +33,12 @@ class LinovelibCrawler:
         self.base_url = "https://www.linovelib.com"
         self.session = requests.Session()
         self.headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36 Edg/133.0.0.0"
+            "accept-encoding": "gzip, deflate, br, zstd",
+            "accept-language": "zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6",
+            "sec-ch-ua": '"Chromium";v="134", "Not:A-Brand";v="24", "Microsoft Edge";v="134"',
+            "sec-ch-ua-mobile": "?0",
+            "sec-ch-ua-platform": '"Windows"',
+            "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36 Edg/134.0.0.0",
         }
         self.min_request_interval = 2  # 两次请求的最小间隔
         self.max_request_interval = 10
@@ -63,9 +68,6 @@ class LinovelibCrawler:
         for attempt in range(max(self.max_retry, 3)):
             try:
                 print(f"请求页面: {url}")
-                # response = self.session.get(url, headers=self.headers)
-                # response.raise_for_status()
-                # return etree.HTML(response.text)
 
                 if attempt == 1:  # 第二次重试，刷新
                     self.driver.refresh()
@@ -112,12 +114,10 @@ class LinovelibCrawler:
         )
         for x_volume in x_volumes:
             # 卷名
-            # volume_name = x_volume.xpath('//h2[@class="v-line"]/text()')[0]
             volume_name = x_volume.xpath('./div[@class="volume-info"]/h2/text()')[0]
 
             # 章节列表
             chapter_list = []
-            # x_chapters = x_volume.xpath('//ul[@class="chapter-list clearfix"]/li/a')
             x_chapters = x_volume.xpath('./ul[@class="chapter-list clearfix"]/li/a')
             for x_chapter in x_chapters:
                 # 章节名
@@ -138,15 +138,41 @@ class LinovelibCrawler:
             volume_list.append(volume)
         self.catalog = volume_list
 
+    # 下载文件
+    def download_file(self, file_url, addtional_headers={}, save_path=None):
+        print(f"正在下载文件: {file_url}")
+        response = self.session.get(
+            file_url, headers={**self.headers, **addtional_headers}
+        )
+        if not response.ok:
+            print(f"下载文件失败: {response.status_code}")
+            return
+
+        save_path = save_path or file_url.split("/")[-1]
+        save_dir = os.path.dirname(save_path)
+        if save_dir:
+            os.makedirs(save_dir, exist_ok=True)
+        with open(save_path, "wb") as f:
+            f.write(response.content)
+        print(f"文件下载成功: {save_path}")
+
     # 解码文本
     def decode_text(self, text):
         font_path = "./read.woff2"
         if not os.path.exists(font_path):
-            print("正在下载字体文件...")
             font_url = self.base_url + "/public/font/read.woff2"
-            with open(font_path, "wb") as f:
-                f.write(requests.get(font_url).content)
-            print("字体文件下载完成！")
+            self.download_file(
+                font_url,
+                {
+                    "accept": "*/*",
+                    "origin": self.base_url,
+                    "priority": "u=0",
+                    "referer": "https://www.linovelib.com/novel/4515/261588_2.html",
+                    "sec-fetch-dest": "font",
+                    "sec-fetch-mode": "cors",
+                    "sec-fetch-site": "same-origin",
+                },
+            )
 
         img_size = 1024
         img = Image.new("1", (img_size * len(text), img_size), 255)
@@ -162,7 +188,6 @@ class LinovelibCrawler:
         if tree.xpath('//head/script[contains(text(),"adoptedStyleSheets")]'):
             has_font_style = True
             # 获取#TextContent p:nth-last-of-type(2)
-            # p_last2 = tree.xpath('//div[@id="TextContent"]/p[last()-1]')[0]
             p_last2 = tree.xpath('//div[@id="TextContent"]/p')[-2]
             content_of_p_last2 = self.decode_text("".join(p_last2.xpath("text()")))
 
@@ -179,7 +204,22 @@ class LinovelibCrawler:
                 contents.append("\n")
             elif element.tag == "img":
                 img_src = element.get("data-src") or element.get("src")
-                contents.append(f"![image]({img_src})\n\n")
+                img_name = img_src.split("/")[-1]
+                save_path = f"{self.novel_id}/{img_name}"
+                self.download_file(
+                    img_src,
+                    {
+                        "accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+                        "priority": "i",
+                        "referer": self.base_url,
+                        "sec-fetch-dest": "image",
+                        "sec-fetch-mode": "no-cors",
+                        "sec-fetch-site": "cross-site",
+                        "sec-fetch-storage-access": "active",
+                    },
+                    save_path,
+                )
+                contents.append(f"![{img_name}]({save_path})")
 
         return "\n".join(contents)
 
