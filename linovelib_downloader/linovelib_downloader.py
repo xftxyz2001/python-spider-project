@@ -30,6 +30,12 @@ def printe(text):
     print(f"\033[31m{text}\033[0m")
 
 
+# 状态
+NOT_STARTED = "not_started"  # 未开始
+IN_PROGRESS = "in_progress"  # 进行中
+COMPLETED = "completed"  # 已完成
+
+
 class LinovelibCrawler:
 
     def start_edge(self):
@@ -72,7 +78,7 @@ class LinovelibCrawler:
         self.decode_text_chunk_size = 32
         self.ocr = ddddocr.DdddOcr(beta=True, show_ad=False)
 
-        self.matedata = {}
+        self.metadata = {}
 
         self.start_edge()
 
@@ -141,11 +147,11 @@ class LinovelibCrawler:
         printw("已达到最大重试次数，程序即将退出...")
         exit()
 
-    # 解析图书信息
-    def parse_matedata(self, tree):
-        printi("正在解析图书元信息（书名、作者、章节目录）...")
-        book_title = tree.xpath('//div[@class="book-meta"]/h1/text()')[0]
-        book_author = tree.xpath('//div[@class="book-meta"]/p/span[1]/a/text()')[0]
+    # 获取卷列表
+    def get_volume_list(self):
+        printi("正在获取卷/章节列表...")
+        catalog_url = f"{self.base_url}/novel/{self.novel_id}/catalog"
+        tree = self.fetch_html(catalog_url)
 
         # 卷列表
         volume_list = []
@@ -167,18 +173,35 @@ class LinovelibCrawler:
                 chapter = {
                     "name": chapter_name,
                     "link": chapter_link,
-                    "status": "not_started",
+                    "status": NOT_STARTED,
                 }
                 chapter_list.append(chapter)
             volume = {
                 "name": volume_name,
                 "chapters": chapter_list,
-                "status": "not_started",
+                "status": NOT_STARTED,
             }
             volume_list.append(volume)
+        return volume_list
+
+    # 解析图书信息
+    def get_metadata(self):
+        printi("正在获取图书元信息（书名、作者、章节目录）...")
+        index_url = f"{self.base_url}/novel/{self.novel_id}.html"
+        index_tree = self.fetch_html(index_url)
+        book_title = index_tree.xpath('//h1[@class="book-name"]/text()')[0]  # 书名
+        book_author = index_tree.xpath('//div[@class="au-name"]/text()')[0]  # 作者一
+        cover_url = index_tree.xpath('//div[@class="book-img fl"]/img/@src')[
+            0
+        ]  # 封面链接
+
+        volume_list = self.get_volume_list()
         self.metadata = {
+            "metafile": f".{self.novel_id}.meta.json",
+            "url": index_url,
             "title": book_title,
             "author": book_author,
+            "cover": cover_url,
             "volumes": volume_list,
         }
         printi("解析图书元信息完成.")
@@ -213,7 +236,7 @@ class LinovelibCrawler:
                     "accept": "*/*",
                     "origin": self.base_url,
                     "priority": "u=0",
-                    "referer": "https://www.linovelib.com/novel/4515/261588_2.html",
+                    "referer": "https://www.linovelib.com/",
                     "sec-fetch-dest": "font",
                     "sec-fetch-mode": "cors",
                     "sec-fetch-site": "same-origin",
@@ -239,7 +262,7 @@ class LinovelibCrawler:
             decoded_text += self.ocr.classification(img)
             i += chunk_size
 
-        printi(f'文本解码完成: "{text}".')
+        printi(f'文本解码完成: "{decoded_text}".')
         return decoded_text
 
     # 解析一页小说
@@ -281,7 +304,7 @@ class LinovelibCrawler:
                     },
                     save_path,
                 )
-                contents.append(f"![{img_name}]({save_path})")
+                contents.append(f"![]({save_path})")
 
         printi("当前页面解析完成.")
         return "\n\n".join(contents)
@@ -302,22 +325,21 @@ class LinovelibCrawler:
         printi("当前章节已解析完成.")
         return "\n".join(contents)
 
-    def save_catalog(self):
+    def save_metadata(self):
         printi("正在保存章节信息...")
         try:
-            with open(f".{self.novel_id}.log.json", "w", encoding="utf-8") as f:
+            with open(self.metadata["metafile"], "w", encoding="utf-8") as f:
                 json.dump(self.metadata, f)
             printi("章节信息保存成功.")
         except Exception as e:
             printe(f"章节信息保存失败: {e}")
 
-    def load_catalog(self):
+    def load_metadata(self):
         printi("正在读取章节信息...")
-        if os.path.exists(f".{self.novel_id}.log.json") and os.path.exists(
-            self.sava_filename
-        ):
+        metafile = f".{self.novel_id}.meta.json"
+        if os.path.exists(metafile) and os.path.exists(self.sava_filename):
             try:
-                with open(f".{self.novel_id}.log.json", "r", encoding="utf-8") as f:
+                with open(metafile, "r", encoding="utf-8") as f:
                     self.metadata = json.load(f)
                 printi(f"章节信息已读取.")
                 return
@@ -325,24 +347,21 @@ class LinovelibCrawler:
                 printe(f"章节信息读取失败: ")
                 logging.exception(e)
 
-        printi(f"获取章节目录中...")
-        catalog_url = f"{self.base_url}/novel/{self.novel_id}/catalog"
-
-        catalog_html = self.fetch_html(catalog_url)
-        self.parse_matedata(catalog_html)
-        self.save_catalog()
+        self.get_metadata()
+        self.save_metadata()
 
         with open(self.sava_filename, "w", encoding="utf-8") as f:
             book_title = self.metadata["title"]
             f.write(f"{book_title}\n---\n")
 
-    def delete_catalog(self):
+    def delete_metadata(self):
         printi("正在删除章节信息...")
         try:
-            os.remove(f".{self.novel_id}.log.json")
+            os.remove(self.metadata["metafile"])
             printi("章节信息已删除.")
         except Exception as e:
-            printe(f"章节信息删除失败: {e}")
+            printe(f"章节信息删除失败: ")
+            logging.exception(e)
 
     def delete_page_source_files(self):
         printi("正在删除章节文件缓存...")
@@ -358,68 +377,88 @@ class LinovelibCrawler:
     # 删除缓存
     def delete_cache(self):
         # 删除章节信息
-        self.delete_catalog()
+        self.delete_metadata()
         # 删除错误的章节文件缓存
         self.delete_page_source_files()
 
     # 循环下载每一卷每一章
     def download_loop(self):
         printi("开启下载循环...")
-        for volume in self.metadata["volumes"]:
-            if volume["status"] == "completed":
+        len_volumes = len(self.metadata["volumes"])
+        for i, volume in enumerate(self.metadata["volumes"]):
+            if volume["status"] == COMPLETED:
                 continue
 
             volume_name = volume["name"]
-            printi(f"当前卷: {volume_name}")
+            printi(f"({i+1}/{len_volumes}) 当前卷: {volume_name}")
             chapters = volume["chapters"]
-            if volume["status"] == "not_started":
+            if volume["status"] == NOT_STARTED:
                 with open(self.sava_filename, "a", encoding="utf-8") as f:
                     f.write(f"\n# {volume_name}\n\n")
 
-                volume["status"] = "in_progress"
-                self.save_catalog()
+                volume["status"] = IN_PROGRESS
+                self.save_metadata()
 
-            for chapter in chapters:
-                if chapter["status"] == "completed":
+            len_chapters = len(chapters)
+            for j, chapter in enumerate(chapters):
+                if chapter["status"] == COMPLETED:
                     continue
 
                 chapter_title = chapter["name"]
-                printi(f"当前章节: {chapter_title}")
-                if chapter["status"] == "not_started":
+                printi(f"({j+1}/{len_chapters}) 当前章节: {chapter_title}")
+                if chapter["status"] == NOT_STARTED:
                     with open(self.sava_filename, "a", encoding="utf-8") as f:
                         f.write(f"## {chapter_title}\n\n")
 
-                    chapter["status"] = "in_progress"
-                    self.save_catalog()
+                    chapter["status"] = IN_PROGRESS
+                    self.save_metadata()
 
                 chapter_link = chapter["link"]
                 content_html = self.fetch_html(chapter_link)
                 content = self.parse_chapter(content_html)
                 with open(self.sava_filename, "a", encoding="utf-8") as f:
                     f.write(f"{content}\n\n")
-                chapter["status"] = "completed"
-                self.save_catalog()
-            volume["status"] = "completed"
-            self.save_catalog()
+                chapter["status"] = COMPLETED
+                self.save_metadata()
+            volume["status"] = COMPLETED
+            self.save_metadata()
         printi("结束下载循环.")
 
     # 将 Markdown文件转换为 EPUB文件
     def to_epub(self):
         printi("正在生成 EPUB 文件...")
-        outputfile = f"{self.sava_filename}.epub"
+        printi("正在检查 pandoc 是否已安装...")
         pypandoc.ensure_pandoc_installed()
-        pypandoc.convert_file(self.sava_filename, "epub", outputfile=outputfile)
+        printi("pandoc 已安装.")
 
-        printi(f"正在写入元信息...")
-        book = epub.read_epub(outputfile)
-        book.set_title(self.metadata["title"])
-        book.add_author(self.metadata["author"])
-        book.set_language("zh")
+        output_file = f"{self.metadata['title']}.epub"
+        # 下载封面
+        cover_path = f"{self.novel_id}/cover.jpg"
+        self.download_file(
+            self.metadata["cover"],
+            {
+                "accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+                "priority": "i",
+                "referer": self.metadata["url"],
+                "sec-fetch-dest": "image",
+                "sec-fetch-mode": "no-cors",
+                "sec-fetch-site": "same-origin",
+            },
+            cover_path,
+        )
+        pypandoc.convert_file(
+            self.sava_filename,
+            "epub",
+            outputfile=output_file,
+            extra_args=[
+                "--metadata",
+                f"title={self.metadata['title']}",
+                "--epub-cover-image",
+                cover_path,
+            ],
+        )
 
-        epub_name = f"{self.metadata['title']}.epub"
-        epub.write_epub(epub_name, book)
-        os.remove(outputfile)
-        printi(f"EPUB 文件已生成 于: {epub_name}")
+        printi(f"EPUB 文件已生成 于: {output_file}")
 
     def download(self, novel_id):
         printi(f"开始下载 {novel_id}")
@@ -427,7 +466,7 @@ class LinovelibCrawler:
         self.novel_id = novel_id
         self.sava_filename = f"{novel_id}.md"
 
-        self.load_catalog()
+        self.load_metadata()
         self.download_loop()
         self.delete_cache()
         printi(f"{self.novel_id} 下载完成")
