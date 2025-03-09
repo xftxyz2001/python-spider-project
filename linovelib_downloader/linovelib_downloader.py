@@ -33,15 +33,16 @@ def printe(text):
 class LinovelibCrawler:
 
     def start_edge(self):
-        printi("正在启动Edge浏览器...")
+        printi("正在配置Edge浏览器...")
         options = Options()
         options.add_argument("--headless")
         options.add_argument("--disable-gpu")
         # 设置日志等级 INFO = 0 WARNING = 1 LOG_ERROR = 2 LOG_FATAL = 3 default is 0
         # options.add_argument("log-level=3")
         # options.add_experimental_option("excludeSwitches", ["enable-automation"])
+        printi("Edge浏览器启动中...")
         self.driver = webdriver.Edge(options=options)
-        time.sleep(2)
+        printi("Edge浏览器已启动.")
 
     # 初始化
     def __init__(self):
@@ -67,6 +68,8 @@ class LinovelibCrawler:
         self.max_wait_time = 10
         self.wait_time = self.min_wait_time
 
+        self.font_image_size = 1024
+        self.decode_text_chunk_size = 32
         self.ocr = ddddocr.DdddOcr(beta=True, show_ad=False)
 
         self.matedata = {}
@@ -75,6 +78,7 @@ class LinovelibCrawler:
 
     def driver_quit(self):
         try:
+            printi("正在关闭浏览器...")
             self.driver.quit()
         except Exception as e:
             printe(f"关闭浏览器出错: ")
@@ -104,6 +108,7 @@ class LinovelibCrawler:
                     self.driver.refresh()
                 else:
                     self.driver.get(url)
+                printi("等待页面加载...")
                 time.sleep(self.wait_time)  # 等待，以便页面加载完全
 
                 page_source = self.driver.page_source
@@ -116,6 +121,7 @@ class LinovelibCrawler:
                         self.wait_time *= 2
                     raise Exception("页面加载失败，请刷新或更换浏览器")
 
+                printi("页面加载完成.")
                 self.wait_time = self.min_wait_time
                 self.request_interval = self.min_request_interval
                 return etree.HTML(page_source)
@@ -137,6 +143,7 @@ class LinovelibCrawler:
 
     # 解析图书信息
     def parse_matedata(self, tree):
+        printi("正在解析图书元信息（书名、作者、章节目录）...")
         book_title = tree.xpath('//div[@class="book-meta"]/h1/text()')[0]
         book_author = tree.xpath('//div[@class="book-meta"]/p/span[1]/a/text()')[0]
 
@@ -174,6 +181,7 @@ class LinovelibCrawler:
             "author": book_author,
             "volumes": volume_list,
         }
+        printi("解析图书元信息完成.")
 
     # 下载文件
     def download_file(self, file_url, addtional_headers={}, save_path=None):
@@ -195,6 +203,7 @@ class LinovelibCrawler:
 
     # 解码文本
     def decode_text(self, text):
+        printi(f'正在解码文本: "{text}"...')
         font_path = "./read.woff2"
         if not os.path.exists(font_path):
             font_url = self.base_url + "/public/font/read.woff2"
@@ -211,15 +220,31 @@ class LinovelibCrawler:
                 },
             )
 
-        img_size = 1024
-        img = Image.new("1", (img_size * len(text), img_size), 255)
-        draw = ImageDraw.Draw(img)
-        font = ImageFont.truetype(font_path, img_size)
-        draw.text((0, -200), text, font=font)
-        return self.ocr.classification(img)
+        # PIL.Image.DecompressionBombError: Image size (304012800 pixels) exceeds limit of 178956970 pixels, could be decompression bomb DOS attack.
+        decoded_text = ""
+        i = 0
+        while i < len(text):
+            chunk_size = (
+                self.decode_text_chunk_size
+                if len(text) - i > 1.5 * self.decode_text_chunk_size
+                else len(text) - i
+            )
+            chunk = text[i : i + chunk_size]
+            img = Image.new(
+                "1", (self.font_image_size * len(chunk), self.font_image_size), 255
+            )
+            draw = ImageDraw.Draw(img)
+            font = ImageFont.truetype(font_path, self.font_image_size)
+            draw.text((0, -200), chunk, font=font)
+            decoded_text += self.ocr.classification(img)
+            i += chunk_size
+
+        printi(f'文本解码完成: "{text}".')
+        return decoded_text
 
     # 解析一页小说
     def parse_page(self, tree):
+        printi("正在解析当前页面...")
         # 检查是否有字体样式加密，并记录加密的p
         has_font_style = False
         if tree.xpath('//head/script[contains(text(),"adoptedStyleSheets")]'):
@@ -258,10 +283,12 @@ class LinovelibCrawler:
                 )
                 contents.append(f"![{img_name}]({save_path})")
 
+        printi("当前页面解析完成.")
         return "\n\n".join(contents)
 
     # 解析章节内容
     def parse_chapter(self, tree):
+        printi("正在解析当前章节...")
         contents = []
         while True:
             contents.append(self.parse_page(tree))
@@ -272,9 +299,11 @@ class LinovelibCrawler:
                 break
             tree = self.fetch_html(next_page)
 
+        printi("当前章节已解析完成.")
         return "\n".join(contents)
 
     def save_catalog(self):
+        printi("正在保存章节信息...")
         try:
             with open(f".{self.novel_id}.log.json", "w", encoding="utf-8") as f:
                 json.dump(self.metadata, f)
@@ -283,6 +312,7 @@ class LinovelibCrawler:
             printe(f"章节信息保存失败: {e}")
 
     def load_catalog(self):
+        printi("正在读取章节信息...")
         if os.path.exists(f".{self.novel_id}.log.json") and os.path.exists(
             self.sava_filename
         ):
@@ -295,7 +325,7 @@ class LinovelibCrawler:
                 printe(f"章节信息读取失败: ")
                 logging.exception(e)
 
-        printi(f"获取章节目录...")
+        printi(f"获取章节目录中...")
         catalog_url = f"{self.base_url}/novel/{self.novel_id}/catalog"
 
         catalog_html = self.fetch_html(catalog_url)
@@ -307,12 +337,15 @@ class LinovelibCrawler:
             f.write(f"{book_title}\n---\n")
 
     def delete_catalog(self):
+        printi("正在删除章节信息...")
         try:
             os.remove(f".{self.novel_id}.log.json")
+            printi("章节信息已删除.")
         except Exception as e:
             printe(f"章节信息删除失败: {e}")
 
     def delete_page_source_files(self):
+        printi("正在删除章节文件缓存...")
         files = glob.glob(".page_source-*.html")
         for file in files:
             try:
@@ -322,13 +355,16 @@ class LinovelibCrawler:
                 printe(f"删除文件 {file} 时出错:")
                 logging.exception(e)
 
+    # 删除缓存
     def delete_cache(self):
         # 删除章节信息
         self.delete_catalog()
         # 删除错误的章节文件缓存
         self.delete_page_source_files()
 
+    # 循环下载每一卷每一章
     def download_loop(self):
+        printi("开启下载循环...")
         for volume in self.metadata["volumes"]:
             if volume["status"] == "completed":
                 continue
@@ -365,6 +401,7 @@ class LinovelibCrawler:
                 self.save_catalog()
             volume["status"] = "completed"
             self.save_catalog()
+        printi("结束下载循环.")
 
     # 将 Markdown文件转换为 EPUB文件
     def to_epub(self):
@@ -372,6 +409,8 @@ class LinovelibCrawler:
         outputfile = f"{self.sava_filename}.epub"
         pypandoc.ensure_pandoc_installed()
         pypandoc.convert_file(self.sava_filename, "epub", outputfile=outputfile)
+
+        printi(f"正在写入元信息...")
         book = epub.read_epub(outputfile)
         book.set_title(self.metadata["title"])
         book.add_author(self.metadata["author"])
@@ -380,7 +419,7 @@ class LinovelibCrawler:
         epub_name = f"{self.metadata['title']}.epub"
         epub.write_epub(epub_name, book)
         os.remove(outputfile)
-        printi(f"EPUB 文件生成完成. {epub_name}")
+        printi(f"EPUB 文件已生成 于: {epub_name}")
 
     def download(self, novel_id):
         printi(f"开始下载 {novel_id}")
