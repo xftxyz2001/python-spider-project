@@ -303,7 +303,8 @@ class LinovelibCrawler:
         self.save_catalog()
 
         with open(self.sava_filename, "w", encoding="utf-8") as f:
-            f.write(f"{self.matedata["title"]}\n---\n")
+            book_title = self.metadata["title"]
+            f.write(f"{book_title}\n---\n")
 
     def delete_catalog(self):
         try:
