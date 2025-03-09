@@ -4,7 +4,9 @@ import re
 import time
 
 import ddddocr
+import pypandoc
 import requests
+from ebooklib import epub
 from lxml import etree
 from PIL import Image, ImageDraw, ImageFont
 from selenium import webdriver
@@ -25,10 +27,8 @@ class LinovelibCrawler:
         time.sleep(2)
 
     # 初始化
-    def __init__(self, novel_id):
+    def __init__(self):
         print("正在初始化...")
-        self.novel_id = novel_id
-        self.sava_filename = f"{novel_id}.md"
 
         self.base_url = "https://www.linovelib.com"
         self.session = requests.Session()
@@ -52,7 +52,20 @@ class LinovelibCrawler:
 
         self.ocr = ddddocr.DdddOcr(beta=True, show_ad=False)
 
+        self.matedata = {}
+
         self.start_edge()
+
+    def driver_quit(self):
+        try:
+            self.driver.quit()
+        except Exception as e:
+            print(f"关闭浏览器出错: {e}")
+
+    # 退出
+    def __del__(self):
+        if hasattr(self, "driver") and self.driver:
+            self.driver_quit()
 
     # 获取html
     def fetch_html(self, url):
@@ -97,15 +110,16 @@ class LinovelibCrawler:
                     print(f"将在 {self.request_interval} 秒后重试...")
                     continue
 
-                self.driver.quit()
+                self.driver_quit()
                 self.start_edge()
 
         print("已达到最大重试次数，程序即将退出...")
         exit()
 
-    # 解析章节
-    def parse_catalog(self, tree):
-        self.book_title = tree.xpath('//div[@class="book-meta"]/h1/text()')[0]
+    # 解析图书信息
+    def parse_matedata(self, tree):
+        book_title = tree.xpath('//div[@class="book-meta"]/h1/text()')[0]
+        book_author = tree.xpath('//div[@class="book-meta"]/p/span[1]/a/text()')[0]
 
         # 卷列表
         volume_list = []
@@ -136,7 +150,11 @@ class LinovelibCrawler:
                 "status": "not_started",
             }
             volume_list.append(volume)
-        self.catalog = volume_list
+        self.metadata = {
+            "title": book_title,
+            "author": book_author,
+            "volumes": volume_list,
+        }
 
     # 下载文件
     def download_file(self, file_url, addtional_headers={}, save_path=None):
@@ -240,7 +258,7 @@ class LinovelibCrawler:
     def save_catalog(self):
         try:
             with open(f".{self.novel_id}.log.json", "w", encoding="utf-8") as f:
-                json.dump(self.catalog, f)
+                json.dump(self.metadata, f)
             print("章节信息保存成功.")
         except Exception as e:
             print(f"章节信息保存失败: {e}")
@@ -251,7 +269,7 @@ class LinovelibCrawler:
         ):
             try:
                 with open(f".{self.novel_id}.log.json", "r", encoding="utf-8") as f:
-                    self.catalog = json.load(f)
+                    self.metadata = json.load(f)
                 print(f"章节信息已读取.")
                 return
             except Exception as e:
@@ -261,11 +279,8 @@ class LinovelibCrawler:
         catalog_url = f"{self.base_url}/novel/{self.novel_id}/catalog"
 
         catalog_html = self.fetch_html(catalog_url)
-        self.parse_catalog(catalog_html)
+        self.parse_matedata(catalog_html)
         self.save_catalog()
-
-        with open(self.sava_filename, "w", encoding="utf-8") as f:
-            f.write(f"{self.book_title}\n---\n")
 
     def delete_catalog(self):
         try:
@@ -273,12 +288,8 @@ class LinovelibCrawler:
         except Exception as e:
             print(f"章节信息删除失败: {e}")
 
-    def download(self):
-        print(f"开始下载 {self.novel_id}")
-        self.load_catalog()
-
-        # for volume_name, chapters in self.catalog:
-        for volume in self.catalog:
+    def download_loop(self):
+        for volume in self.metadata["volumes"]:
             if volume["status"] == "completed":
                 continue
 
@@ -292,7 +303,6 @@ class LinovelibCrawler:
                 volume["status"] = "in_progress"
                 self.save_catalog()
 
-            # for chapter_title, chapter_link in chapters:
             for chapter in chapters:
                 if chapter["status"] == "completed":
                     continue
@@ -316,9 +326,35 @@ class LinovelibCrawler:
             volume["status"] = "completed"
             self.save_catalog()
 
-        self.driver.quit()
+    # 将 Markdown文件转换为 EPUB文件
+    def to_epub(self):
+        print("正在生成 EPUB 文件...")
+        outputfile = f"{self.sava_filename}.epub"
+        pypandoc.ensure_pandoc_installed()
+        pypandoc.convert_file(self.sava_filename, "epub", outputfile=outputfile)
+        book = epub.read_epub(outputfile)
+        book.set_title(self.metadata["title"])
+        book.add_author(self.metadata["author"])
+        book.set_language("zh")
+
+        epub_name = f"{self.metadata['title']}.epub"
+        epub.write_epub(epub_name, book)
+        print(f"EPUB 文件生成完成. {epub_name}")
+
+    def download(self, novel_id):
+        print(f"开始下载 {novel_id}")
+
+        self.novel_id = novel_id
+        self.sava_filename = f"{novel_id}.md"
+
+        self.load_catalog()
+        # with open(self.sava_filename, "w", encoding="utf-8") as f:
+        #     f.write(f"{self.matedata["title"]}\n---\n")
+        # self.download_loop()
         self.delete_catalog()
         print(f"{self.novel_id} 下载完成")
+
+        self.to_epub()
 
 
 if __name__ == "__main__":
@@ -328,8 +364,8 @@ if __name__ == "__main__":
     novel_id = re.findall(r"\d+", input_id)[0]
     print(f"小说ID已获取: {novel_id}")
     try:
-        crawler = LinovelibCrawler(novel_id)
-        crawler.download()
+        crawler = LinovelibCrawler()
+        crawler.download(novel_id)
     except Exception as e:
         print(f"出错了: {e}")
         input("按任意键退出...")
