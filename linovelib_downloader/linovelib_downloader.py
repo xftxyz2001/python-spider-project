@@ -41,8 +41,8 @@ class LinovelibCrawler:
     def start_edge(self):
         printi("正在配置Edge浏览器...")
         options = Options()
-        options.add_argument("--headless")
-        options.add_argument("--disable-gpu")
+        # options.add_argument("--headless")
+        # options.add_argument("--disable-gpu")
         # 设置日志等级 INFO = 0 WARNING = 1 LOG_ERROR = 2 LOG_FATAL = 3 default is 0
         # options.add_argument("log-level=3")
         # options.add_experimental_option("excludeSwitches", ["enable-automation"])
@@ -118,6 +118,8 @@ class LinovelibCrawler:
                 time.sleep(self.wait_time)  # 等待，以便页面加载完全
 
                 page_source = self.driver.page_source
+                while "<title>请稍候…</title>" in page_source:
+                    time.sleep(3)
                 if "（內容加載失敗！請刷新或更換瀏覽器）" in page_source:
                     with open(
                         f".page_source-{time.time()}.html", "w", encoding="utf-8"
@@ -189,11 +191,13 @@ class LinovelibCrawler:
         printi("正在获取图书元信息（书名、作者、章节目录）...")
         index_url = f"{self.base_url}/novel/{self.novel_id}.html"
         index_tree = self.fetch_html(index_url)
-        book_title = index_tree.xpath('//h1[@class="book-name"]/text()')[0]  # 书名
-        book_author = index_tree.xpath('//div[@class="au-name"]/text()')[0]  # 作者一
-        cover_url = index_tree.xpath('//div[@class="book-img fl"]/img/@src')[
-            0
-        ]  # 封面链接
+        
+        book_name_tree = index_tree.xpath('//h1[@class="book-name"]/text()')  # 书名
+        book_title = book_name_tree[0] if len(book_name_tree) >=1 else "书名获取失败"
+        book_au_name_tree = index_tree.xpath('//div[@class="au-name"]/text()')  # 作者一
+        book_author = book_au_name_tree[0] if len(book_au_name_tree)>=1 else "作者获取失败"
+        book_img_tree = index_tree.xpath('//div[@class="book-img fl"]/img/@src')
+        cover_url = book_img_tree[0] if len(book_img_tree) >=1 else ""
 
         volume_list = self.get_volume_list()
         self.metadata = {
@@ -433,29 +437,33 @@ class LinovelibCrawler:
 
         output_file = f"{self.metadata['title']}.epub"
         # 下载封面
+        cover_url = self.metadata["cover"]
         cover_path = f"{self.novel_id}/cover.jpg"
-        self.download_file(
-            self.metadata["cover"],
-            {
-                "accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
-                "priority": "i",
-                "referer": self.metadata["url"],
-                "sec-fetch-dest": "image",
-                "sec-fetch-mode": "no-cors",
-                "sec-fetch-site": "same-origin",
-            },
-            cover_path,
-        )
+        if cover_url:
+            self.download_file(
+                cover_url,
+                {
+                    "accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+                    "priority": "i",
+                    "referer": self.metadata["url"],
+                    "sec-fetch-dest": "image",
+                    "sec-fetch-mode": "no-cors",
+                    "sec-fetch-site": "same-origin",
+                },
+                cover_path,
+            )
+        extra_args=[
+            "--metadata",
+            f"title={self.metadata['title']}"
+        ]
+        if cover_url:
+            extra_args.append("--epub-cover-image")
+            extra_args.append(cover_path)
         pypandoc.convert_file(
             self.sava_filename,
             "epub",
             outputfile=output_file,
-            extra_args=[
-                "--metadata",
-                f"title={self.metadata['title']}",
-                "--epub-cover-image",
-                cover_path,
-            ],
+            extra_args=extra_args,
         )
 
         printi(f"EPUB 文件已生成 于: {output_file}")
